@@ -9,6 +9,94 @@ import os
 import sys
 import argparse
 import json
+import math
+
+
+def _betacf(a, b, x):
+    # continued fraction for the incomplete beta function (modified Lentz)
+    tiny = 1e-300
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    d = tiny if abs(d) < tiny else d
+    d = 1.0 / d
+    h = d
+    for m in range(1, 1000):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        d = tiny if abs(d) < tiny else d
+        c = 1.0 + aa / c
+        c = tiny if abs(c) < tiny else c
+        d = 1.0 / d
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        d = tiny if abs(d) < tiny else d
+        c = 1.0 + aa / c
+        c = tiny if abs(c) < tiny else c
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < 1e-15:
+            break
+    return h
+
+def _betainc(a, b, x):
+    # regularized incomplete beta function I_x(a, b)
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    lbt = math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) + a * math.log(x) + b * math.log1p(-x)
+    if x < (a + 1.0) / (a + b + 2.0):
+        return math.exp(lbt) * _betacf(a, b, x) / a
+    return 1.0 - math.exp(lbt) * _betacf(b, a, 1.0 - x) / b
+
+def _betaincinv(a, b, p):
+    # quantile of the beta distribution by bisection
+    lo, hi = 0.0, 1.0
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        if _betainc(a, b, mid) < p:
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < 1e-15:
+            break
+    return (lo + hi) / 2
+
+def jeffreys_interval(x, n, alpha=0.05):
+    '''Modified Jeffreys interval for a binomial proportion (Brown, Cai and
+    DasGupta 2001, doi:10.1214/ss/1009213286), with the same boundary rules
+    as hap.py and som.py, so all tools report comparable intervals.
+    Returns (lower, upper).'''
+    x, n = int(x), int(n)
+    if n <= 0:
+        return 0.0, 1.0
+    if x == n:
+        lower = (alpha / 2) ** (1 / n)
+    elif x <= 1:
+        lower = 0.0
+    else:
+        lower = _betaincinv(x + 0.5, n - x + 0.5, alpha / 2)
+    if x == 0:
+        upper = 1 - (alpha / 2) ** (1 / n)
+    elif x >= n - 1:
+        upper = 1.0
+    else:
+        upper = _betaincinv(x + 0.5, n - x + 0.5, 1 - alpha / 2)
+    return max(lower, 0.0), min(upper, 1.0)
+
+def add_intervals(df, recall_x, recall_n, precision_x, precision_n):
+    # 95% intervals for recall and precision from the counts behind them
+    recall = [jeffreys_interval(x, n) for x, n in zip(recall_x, recall_n)]
+    precision = [jeffreys_interval(x, n) for x, n in zip(precision_x, precision_n)]
+    df['recall_lower'] = [r[0] for r in recall]
+    df['recall_upper'] = [r[1] for r in recall]
+    df['precision_lower'] = [p[0] for p in precision]
+    df['precision_upper'] = [p[1] for p in precision]
+    return df
 
 
 def parse_args(args=None):
@@ -388,6 +476,36 @@ def main(args=None):
 
     else:
         raise ValueError('only results from concordance, intersect, truvari, svbenchmark, wittyer, rtgtools, happy, sompy or aardvark tools can be merged')
+
+    # som.py reports its own intervals. svbenchmark is left out because its
+    # report gives no count of true positive calls for the precision interval.
+    if args.bench in ["rtgtools", "truvari", "wittyer", "intersect"]:
+        summ_table = add_intervals(summ_table,
+            summ_table['TP_base'], summ_table['TP_base'] + summ_table['FN'],
+            summ_table['TP_comp'], summ_table['TP_comp'] + summ_table['FP'])
+        if args.bench == "wittyer":
+            # base-level counts are not independent trials
+            base = summ_table['StatsType'] != 'Event'
+            summ_table.loc[base, ['recall_lower','recall_upper','precision_lower','precision_upper']] = float('nan')
+
+    elif args.bench == "concordance":
+        summ_table = add_intervals(summ_table,
+            summ_table['TP'], summ_table['TP'] + summ_table['FN'],
+            summ_table['TP'], summ_table['TP'] + summ_table['FP'])
+
+    elif args.bench == "happy":
+        # in this table TP_comp is TRUTH.TP and TP_Total is QUERY.TOTAL;
+        # hap.py counts QUERY.TP as QUERY.TOTAL - QUERY.FP - QUERY.UNK
+        query_tp = summ_table['TP_Total'] - summ_table['FP'] - summ_table['UNK']
+        summ_table = add_intervals(summ_table,
+            summ_table['TP_comp'], summ_table['TP_comp'] + summ_table['FN'],
+            query_tp, query_tp + summ_table['FP'])
+
+    elif args.bench == "aardvark":
+        # TP_base holds truth_total here
+        summ_table = add_intervals(summ_table,
+            summ_table['TP_base'] - summ_table['FN'], summ_table['TP_base'],
+            summ_table['TP_comp'], summ_table['TP_comp'] + summ_table['FP'])
 
     summ_table.reset_index(drop=True, inplace=True)
     summ_table.to_csv(args.output + ".summary.csv", index=False)

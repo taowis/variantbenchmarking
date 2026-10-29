@@ -21,5 +21,13 @@ views:
           display-mode: normal
         Recall:
           display-mode: normal
+        recall_lower:
+          display-mode: normal
+        recall_upper:
+          display-mode: normal
+        precision_lower:
+          display-mode: normal
+        precision_upper:
+          display-mode: normal
         F1:
           display-mode: normal

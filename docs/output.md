@@ -164,7 +164,7 @@ Benchmark results are created separately for each test vcf and for each method u
         - `*_lenght.TP_comp.html`: Variant length distribution histogram specifically for True Positive comparison calls.
   - `tables/`
     - `variant_type/`
-      - `analysis_tool.variant_type.summary.csv`: Summary of performance stats from callers
+      - `analysis_tool.variant_type.summary.csv`: Summary of performance stats from callers. Recall and precision come with 95% confidence intervals (`recall_lower`, `recall_upper`, `precision_lower`, `precision_upper`), computed from the counts with the modified Jeffreys interval used by hap.py and som.py (Brown, Cai and DasGupta 2001). These matter most when a region holds few truth variants, such as a gene panel: 53 of 53 variants found still only shows recall above 0.93. SVanalyzer tables and the base-level rows of Wittyer have no intervals.
   - `reports/`
     - `happy/`
       - `happy_report.html`: Standalone interactive HTML report generated with [ga4gh-happy-report](https://github.com/bag-cnag/ga4gh-happy-report) from the stratified hap.py `*.roc.all.csv.gz` results of all test VCFs (germline small variants only)
